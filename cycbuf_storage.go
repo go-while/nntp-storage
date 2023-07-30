@@ -41,7 +41,7 @@ type CYCBUF struct {
 	// defines what this cycbuf stores: [head|body|comb]
 	Cycbuf_type		string
 
-	// full size of this cycbuf (cycbuf_header+cycbuf_body+cycbuf_header)
+	// full size of this cycbuf (cycbuf_header+cycbuf_body+cycbuf_footer)
 	Cycbuf_size		int
 
 	// constant (pow^2!) defines blocksize of this cycbuf: 128K - 1G bytes
