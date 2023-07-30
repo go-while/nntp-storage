@@ -11,10 +11,14 @@ var (
 
 /*
  *  storage.StorageCounter.Get("head_readcache_worker")
+ *  storage.StorageCounter.Get("head_readcache_worker_max")
  *  storage.StorageCounter.Get("body_readcache_worker")
+ *  storage.StorageCounter.Get("body_readcache_worker_max")
  *
  *  storage.StorageCounter.Get("head_writecache_worker")
+ *  storage.StorageCounter.Get("head_writecache_worker_max")
  *  storage.StorageCounter.Get("body_writecache_worker")
+ *  storage.StorageCounter.Get("body_writecache_worker_max")
  *
  *  storage.StorageCounter.Get("xref_link_worker")
  *  storage.StorageCounter.Get("redis_link_worker")
@@ -82,6 +86,9 @@ func (sc *SC) Dec(countername string) {
 } // end func SC.Dec
 
 func (sc *SC) Add(countername string, value uint64) {
+	if value <= 0 {
+		return
+	}
 	sc.Checkmap()
 	sc.mux.Lock()
 	sc.v[countername] += value
