@@ -294,15 +294,15 @@ to 'cachedir/[head|body]/[a-f0-9]/[a-f0-9]/[a-f0-9]/messageidhash[:3].[head|body
 ```
 
 
-## Contributing
+# Contributing
 
 Pull requests are welcome.
 
 For major changes, please open an issue first to discuss what you would like to change.
 
-## License
+# License
 
-[MIT](https://choosealicense.com/licenses/mit/)
+This project is licensed under the MIT License - see the [LICENSE](https://choosealicense.com/licenses/mit/) file for details.
 
 ## Author
 [go-while](https://github.com/go-while)
