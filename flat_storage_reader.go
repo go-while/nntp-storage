@@ -15,14 +15,14 @@ var (
 )
 
 type ReadItem struct {
-	Fileobj []byte
+	Fileobj *[]byte
 	Err     error
 } // end storage.ReadItem struct
 
 type ReadReq struct {
 	Sessionid string
 	File_path string
-	Cli_chan  chan ReadItem
+	Cli_chan  chan *ReadItem
 	Cmdstring string
 	AskRedis  bool
 } // end storage.ReadReq struct
@@ -161,7 +161,7 @@ for_rc:
 
 				} // end if !result
 				stats++
-				readreq.Cli_chan <- ReadItem{ret, nil}
+				readreq.Cli_chan <- &ReadItem{&ret, nil}
 
 			} else {
 
@@ -187,7 +187,7 @@ for_rc:
 
 				if fileobj, err = ioutil.ReadFile(find_file); err != nil {
 					// read from diskcache failed
-					readreq.Cli_chan <- ReadItem{nil, err}
+					readreq.Cli_chan <- &ReadItem{nil, err}
 					continue for_rc
 				} // end ioutil.ReadFile
 
@@ -209,7 +209,7 @@ for_rc:
 					}
 				}
 
-				readreq.Cli_chan <- ReadItem{fileobj, nil} // pass answer to read request back to client
+				readreq.Cli_chan <- &ReadItem{&fileobj, nil} // pass answer to read request back to client
 
 				readb += uint64(len(fileobj))
 				fileobj = nil

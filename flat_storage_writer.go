@@ -19,7 +19,8 @@ var (
 type CacheItem struct {
 	Msgidhash string
 	Head      bool
-	Lines     []string
+	Lines     *[]string
+	Bytes     *[]byte // should already have "\n" (or "\r\n") as end of line!
 	Size      int
 	Retchan   chan int
 } // end CacheItem struct
@@ -33,7 +34,7 @@ type WC struct {
 	cachedir               string
 	WC_body_chan           chan CacheItem
 	WC_head_chan           chan CacheItem
-	Log_cache_history_chan chan []string
+	Log_cache_history_chan chan *[]string
 	do_write_cachelog      bool
 	fh_cache_history       *os.File
 	fh_cache_history_hour  int
@@ -75,7 +76,7 @@ func (wc *WC) Load_Writecache(head_wc_workers uint64, wc_head_cache_max int, bod
 	}
 
 	if wc.Log_cache_history_chan == nil {
-		wc.Log_cache_history_chan = make(chan []string, head_wc_workers+bodycache_workers)
+		wc.Log_cache_history_chan = make(chan *[]string, head_wc_workers+bodycache_workers)
 	}
 
 	if bufio_max > 0 {
@@ -129,18 +130,18 @@ for_wc:
 				stop = true
 				break for_wc
 			}
-			if len(object.Lines) == 0 {
-				log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(object.Lines), object.Size)
+			if object.Lines == nil || len(*object.Lines) == 0 {
+				log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
 				continue for_wc
 			}
 			if object.Size == 0 {
 				// no size supplied?! ok we calc it...
-				if len(object.Lines) > 0 {
-					for _, line := range object.Lines {
+				if len(*object.Lines) > 0 {
+					for _, line := range *object.Lines {
 						object.Size += len(line)
 					}
 				} else {
-					log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(object.Lines), object.Size)
+					log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
 					continue for_wc
 				}
 			}
@@ -176,7 +177,7 @@ for_wc:
 // write_cache() writes a single head or body to storage
 // pass bytes (utils.Lines2Bytes(lines)) or lines ([]string) to this function
 // using either ioutil.Writefile or bufio.WriteString
-func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines []string, size int) int {
+func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]string, size int) int {
 	TIMEDIR_FORMAT := false
 	//time_dir, hour_dir := "", ""
 	var wrote_bytes int
@@ -224,13 +225,13 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines []st
 
 		if file, err := os.OpenFile(filename_tmp, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 
-			bufsize := size + len(lines)
+			bufsize := size + len(*lines)
 			if bufsize >= wc.bufio_max {
 				bufsize = wc.bufio_max
 			}
 			datawriter := bufio.NewWriterSize(file, bufsize)
 
-			for _, line := range lines {
+			for _, line := range *lines {
 				if n, err := datawriter.WriteString(line + "\n"); err != nil {
 					log.Printf("ERROR wc.write_cache datawriter.Write err='%v'", err)
 					file.Close()
@@ -262,7 +263,7 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines []st
 			}
 
 			if wc.do_write_cachelog {
-				wc.Log_cache_history_chan <- []string{fmt.Sprintf("%s:%d", log_filename, wrote_bytes)}
+				wc.Log_cache_history_chan <- &[]string{fmt.Sprintf("%s:%d", log_filename, wrote_bytes)}
 			}
 
 		} // end open file
@@ -328,8 +329,11 @@ forever:
 				log.Print("cache_history_worker STOP SIGNAL")
 				break forever
 			}
+			if lines == nil {
+				continue
+			}
 			wc.write_cache_history(lines)
-			wrote_lines += len(lines)
+			wrote_lines += len(*lines)
 
 			if wrote_lines > max || lastflush < utils.UnixTimeSec()-5 {
 				if err := wc.dw_cache_history.Flush(); err != nil {
@@ -351,8 +355,8 @@ forever:
 	*/
 } // end func cache_history_worker
 
-func (wc *WC) write_cache_history(writelog []string) {
-	if len(writelog) == 0 {
+func (wc *WC) write_cache_history(writelog *[]string) {
+	if writelog == nil || len(*writelog) == 0 {
 		return
 	}
 
@@ -361,7 +365,7 @@ func (wc *WC) write_cache_history(writelog []string) {
 		return
 	}
 
-	for _, logline := range writelog {
+	for _, logline := range *writelog {
 		if _, err := wc.dw_cache_history.WriteString(logline + "\n"); err != nil {
 			log.Printf("ERROR wc.write_cache_history: history write failed err='%v'", err)
 			break
