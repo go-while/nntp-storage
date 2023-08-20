@@ -134,8 +134,15 @@ for_wc:
 				log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
 				continue for_wc
 			}
+			if len(object.Msgidhash) < 32 { // allows at least md5
+				log.Printf("ERROR WC wType=%s wid=%d len(Msgidhash)=%d < 32", wType, wid, len(object.Msgidhash))
+				continue for_wc
+			}
 			if object.Size == 0 {
 				// no size supplied?! ok we calc it...
+				if len(*object.Bytes) > 0 {
+					object.Size += len(*object.Bytes)
+				} else
 				if len(*object.Lines) > 0 {
 					for _, line := range *object.Lines {
 						object.Size += len(line)
@@ -144,10 +151,6 @@ for_wc:
 					log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
 					continue for_wc
 				}
-			}
-			if len(object.Msgidhash) < 32 { // allows at least md5
-				log.Printf("ERROR WC wType=%s wid=%d len(Msgidhash)=%d < 32", wType, wid, len(object.Msgidhash))
-				continue for_wc
 			}
 
 			item_wrote_bytes := wc.write_cache(wid, object.Msgidhash, object.Head, object.Lines, object.Size)
