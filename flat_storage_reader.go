@@ -187,6 +187,7 @@ for_rc:
 
 				if fileobj, err = ioutil.ReadFile(find_file); err != nil {
 					// read from diskcache failed
+					log.Printf("ioutil.ReadFile err='%v'", err)
 					readreq.Cli_chan <- &ReadItem{nil, err}
 					continue for_rc
 				} // end ioutil.ReadFile
@@ -212,7 +213,6 @@ for_rc:
 				readreq.Cli_chan <- &ReadItem{&fileobj, nil} // pass answer to read request back to client
 
 				readb += uint64(len(fileobj))
-				fileobj = nil
 
 			} // end if else readreq.Cmdstring
 		} // end select
