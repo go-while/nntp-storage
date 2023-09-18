@@ -235,6 +235,10 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 			datawriter := bufio.NewWriterSize(file, bufsize)
 
 			for _, line := range *lines {
+				// dotwriter: escape leading dot
+				if len(line) > 0 && line[0] == '.' {
+					line = "."+line
+				}
 				if n, err := datawriter.WriteString(line + "\n"); err != nil {
 					log.Printf("ERROR wc.write_cache datawriter.Write err='%v'", err)
 					file.Close()
