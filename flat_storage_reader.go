@@ -146,8 +146,10 @@ for_rc:
 
 				if !result {
 					if utils.FileExists(readreq.File_path) {
+						//log.Printf("storage STAT OK fp='%s'", readreq.File_path)
 						ret[0] = 'S' // ok
 					} else {
+						//log.Printf("storage STAT NF fp='%s'", readreq.File_path)
 						ret[0] = '0' // not found
 					}
 
