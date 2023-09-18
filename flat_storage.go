@@ -7,6 +7,10 @@ import (
 	"os"
 )
 
+var (
+	DOTSTUFFING bool // default false = off. frontend reader/writer should handle it.
+)
+
 func Make_cache_dir(cachedir string, bodycache bool, headcache bool) {
 	if cachedir == "" {
 		log.Printf("ERROR storage.Make_cache_dir: cachedir not set")
