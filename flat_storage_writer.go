@@ -7,6 +7,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -82,7 +83,7 @@ func (wc *WC) Load_Writecache(head_wc_workers uint64, wc_head_cache_max int, bod
 	if bufio_max > 0 {
 		wc.bufio_max = bufio_max
 	} else {
-		wc.bufio_max = 32*1024
+		wc.bufio_max = 32 * 1024
 	}
 	// values set, create channels and boot workers
 	var wid uint64
@@ -142,8 +143,7 @@ for_wc:
 				// no size supplied?! ok we calc it...
 				if len(*object.Bytes) > 0 {
 					object.Size += len(*object.Bytes)
-				} else
-				if len(*object.Lines) > 0 {
+				} else if len(*object.Lines) > 0 {
 					for _, line := range *object.Lines {
 						object.Size += len(line)
 					}
@@ -233,11 +233,12 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 				bufsize = wc.bufio_max
 			}
 			datawriter := bufio.NewWriterSize(file, bufsize)
-
 			for _, line := range *lines {
-				// dotwriter: escape leading dot
-				if len(line) > 0 && line[0] == '.' {
-					line = "."+line
+				if DOTSTUFFING {
+					// dotwriter: escape leading dot
+					if strings.HasPrefix(line, ".") {
+						line = "." + line // add escape dot to line
+					}
 				}
 				if n, err := datawriter.WriteString(line + "\n"); err != nil {
 					log.Printf("ERROR wc.write_cache datawriter.Write err='%v'", err)
@@ -281,27 +282,27 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 } // end func write_cache
 
 func (wc *WC) WC_Worker_UP(wType string) {
-	StorageCounter.Inc(wType+"_writecache_worker_max")
+	StorageCounter.Inc(wType + "_writecache_worker_max")
 } // end func storage.WC_Worker_UP
 
 func (wc *WC) WC_Worker_DN(wType string) {
-	StorageCounter.Dec(wType+"_writecache_worker_max")
+	StorageCounter.Dec(wType + "_writecache_worker_max")
 } // end func storage.WC_Worker_DN
 
 func (wc *WC) WC_Worker_Set(wType string, new_maxworkers uint64) {
 	wc.mux.Lock()
 	defer wc.mux.Unlock()
-	old_maxworkers := StorageCounter.Get(wType+"_writecache_worker_max")
+	old_maxworkers := StorageCounter.Get(wType + "_writecache_worker_max")
 	StorageCounter.Set(wType+"_writecache_worker_max", uint64(new_maxworkers))
 	if new_maxworkers > old_maxworkers {
 		var wc_chan chan CacheItem
-		switch(wType) {
+		switch wType {
 		case "head":
 			wc_chan = wc.WC_head_chan
 		case "body":
 			wc_chan = wc.WC_body_chan
 		}
-		for wid := old_maxworkers+1; wid <= new_maxworkers; wid++ {
+		for wid := old_maxworkers + 1; wid <= new_maxworkers; wid++ {
 			go wc.writecache_worker(wid, wType, wc_chan)
 			utils.BootSleep()
 		}
@@ -353,12 +354,12 @@ forever:
 	} // end forever
 
 	/*
-	if err := wc.dw_cache_history.Flush(); err != nil {
-		log.Printf("ERROR wc.cache_history_worker Flush err='%v'", err)
-	}
-	if err := wc.fh_cache_history.Close(); err != nil {
-		log.Printf("ERROR wc.cache_history_worker fh.Close err='%v'", err)
-	}
+		if err := wc.dw_cache_history.Flush(); err != nil {
+			log.Printf("ERROR wc.cache_history_worker Flush err='%v'", err)
+		}
+		if err := wc.fh_cache_history.Close(); err != nil {
+			log.Printf("ERROR wc.cache_history_worker fh.Close err='%v'", err)
+		}
 	*/
 } // end func cache_history_worker
 
