@@ -42,7 +42,6 @@ func (rc *RC) Load_Readcache(head_rc_workers uint64, rc_head_ncq int, body_rc_wo
 
 	rc.Debug = debug_flag
 
-
 	if redis_pool != nil {
 		rc.redis_pool = redis_pool
 		switch redis_expire {
@@ -194,6 +193,9 @@ for_rc:
 					continue for_rc
 				} // end ioutil.ReadFile
 
+				if DOTSTUFFING {
+					fileobj = utils.UndoDotStuffingByte(fileobj)
+				}
 				// successfully read file from diskcache
 				if rc.Debug {
 					log.Printf("[%s] RC Req wType=%s fp='%s'", readreq.Sessionid, wType, readreq.File_path)
@@ -259,27 +261,27 @@ func (rc *RC) STOP_RC() {
 } // end func storage.Readcache.STOP_RC
 
 func (rc *RC) RC_Worker_UP(wType string) {
-	StorageCounter.Inc(wType+"_readcache_worker_max")
+	StorageCounter.Inc(wType + "_readcache_worker_max")
 } // end func storage.ReadCache.WC_Worker_UP
 
 func (rc *RC) RC_Worker_DN(wType string) {
-	StorageCounter.Dec(wType+"_readcache_worker_max")
+	StorageCounter.Dec(wType + "_readcache_worker_max")
 } // end func storage.ReadCache.WC_Worker_DN
 
 func (rc *RC) RC_Worker_Set(wType string, new_maxworkers uint64) {
 	rc.mux.Lock()
 	defer rc.mux.Unlock()
-	old_maxworkers := StorageCounter.Get(wType+"_readcache_worker_max")
+	old_maxworkers := StorageCounter.Get(wType + "_readcache_worker_max")
 	StorageCounter.Set(wType+"_readcache_worker_max", new_maxworkers)
 	if new_maxworkers > old_maxworkers {
 		var rc_chan chan ReadReq
-		switch(wType) {
+		switch wType {
 		case "head":
 			rc_chan = rc.RC_head_chan
 		case "body":
 			rc_chan = rc.RC_body_chan
 		}
-		for wid := old_maxworkers+1; wid <= new_maxworkers; wid++ {
+		for wid := old_maxworkers + 1; wid <= new_maxworkers; wid++ {
 			go rc.readcache_worker(wid, wType, rc_chan, nil)
 			utils.BootSleep()
 		}
