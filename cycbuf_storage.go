@@ -397,7 +397,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 
 	newCB := &CYCBUF{}
 	newCB.Ident = ident
-	//newCB.Cookie = utils.RandomCharsHex(8)
+	newCB.Cookie = utils.RandomCharsHex(8)
 	newCB.Type = ctype
 	newCB.InitCycBufSize = initsize
 	newCB.Rollover = rollover
@@ -411,7 +411,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 	newCB.TimeOpen = utils.UnixTimeSec()
 	newCB.Offsets = make(map[int]*area)
 
-	log.Printf("CreateCycBuf: ident='%s' cookie='%s' ctype=%d rollover=%t", ident, newCB.Cookie, ctype, rollover)
+	//log.Printf("CreateCycBuf: ident='%s' cookie='%s' ctype=%d rollover=%t", ident, newCB.Cookie, ctype, rollover)
 
 	areasize := newCB.InitCycBufSize
 	if writers == 1 {
@@ -422,12 +422,12 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		if !utils.CheckNumberPowerOfTwo(int(areasize)) {
 			return nil, fmt.Errorf("ERROR CreateCycBuf calculating areasize failed")
 		}
-		log.Printf(" `-> initsize=%d writers=%d areasize=%d", initsize, writers, areasize)
+		//log.Printf(" `-> initsize=%d writers=%d areasize=%d", initsize, writers, areasize)
 		var minPos int64
 		maxPos := areasize
 		for wid := 1; wid <= int(writers); wid++ {
 			newCB.Offsets[wid] = &area{ minPos: minPos, maxPos: maxPos }
-			log.Printf("  `-> AREA writerid=%d 'minPos >= %d' && 'maxPos < %d'", wid, minPos, maxPos)
+			//log.Printf("  `-> AREA writerid=%d 'minPos >= %d' && 'maxPos < %d'", wid, minPos, maxPos)
 			minPos += areasize
 			maxPos += areasize
 		}
@@ -448,7 +448,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 	for i := 0; i < 1024; i++ {
 		teststring = teststring+"0\n0\n"
 	}
-	log.Printf("len teststring=%d bytes=%d", len(teststring), len([]byte(teststring)))
+	//log.Printf("len teststring=%d bytes=%d", len(teststring), len([]byte(teststring)))
 	// mmap regions for writers and check for null bytes
 	for wid := 1; wid <= int(writers); wid++ {
 		fh, err := os.OpenFile(bufpath, os.O_RDWR, 0644)
@@ -471,7 +471,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 			return nil, err
 		}
 
-		log.Printf(" write wid=%d mapped.Pos=%d len=%d min=%d max=%d", wid, mapped.Pos(), mapped.Len(), newCB.Offsets[wid].minPos, newCB.Offsets[wid].maxPos)
+		//log.Printf(" write wid=%d mapped.Pos=%d len=%d min=%d max=%d", wid, mapped.Pos(), mapped.Len(), newCB.Offsets[wid].minPos, newCB.Offsets[wid].maxPos)
 
 		writes, bytectr := 0, 0
 		for i := int64(0); i < areasize/4096; i++ {
@@ -482,9 +482,9 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 			writes++
 			bytectr += n
 		}
-		log.Printf("  wid=%d writes=%d bytes=%d mapped.Pos=%d", wid, writes, bytectr, mapped.Pos())
+		//log.Printf("  wid=%d writes=%d bytes=%d mapped.Pos=%d", wid, writes, bytectr, mapped.Pos())
 		mapped.Seek(0, 0)
-		log.Printf(" reset wid=%d mapped.Pos=%d areasize=%d", wid, mapped.Pos(), areasize)
+		//log.Printf(" reset wid=%d mapped.Pos=%d areasize=%d", wid, mapped.Pos(), areasize)
 
 		//log.Printf(" reset wid=%d mapped.Pos=%d", wid, mapped.Pos())
 
@@ -507,7 +507,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		for i := 0; i < 2048; i++ {
 			nulls = nulls+"\x00\x00"
 		}
-		log.Printf(" OK counted null=%d is half of areasize, write nulls=%d bytes=%d", null, len(nulls), len([]byte(nulls)))
+		//log.Printf(" OK counted null=%d is half of areasize, write nulls=%d bytes=%d", null, len(nulls), len([]byte(nulls)))
 		for i := int64(0); i < areasize/4096; i++ {
 			if n, err := mapped.Write([]byte(nulls)); err != nil {
 				log.Printf("ERROR mapped.Write err='%v' i=%d areasize=%d n=%d", err, i, areasize, n)
@@ -518,7 +518,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		newCB.Offsets[wid].Mmap = mapped
 		newCB.Offsets[wid].file = fh
 
-		log.Printf(" `> OK writer=%d/%d mapped=%d nulls=%d pos=%d", wid, writers, len(mapped.Bytes()), null, mapped.Pos())
+		//log.Printf(" `> OK writer=%d/%d mapped=%d nulls=%d pos=%d", wid, writers, len(mapped.Bytes()), null, mapped.Pos())
 	}
 
 	return newCB, nil
