@@ -222,11 +222,11 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 		}*/
 	}
 
-	filename_tmp := filename + ".tmp"
+	//filename_tmp := filename + ".tmp"
 
 	if lines != nil {
 
-		if file, err := os.OpenFile(filename_tmp, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+		if file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 
 			bufsize := size + len(*lines)
 			if bufsize >= wc.bufio_max {
@@ -248,33 +248,34 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 					wrote_bytes += n
 				}
 			}
-			//lines = nil
 
 			if err := datawriter.Flush(); err != nil {
 				log.Printf("ERROR wc.write_cache datawriter.Flush err='%v'", err)
 				return 0
 			}
-			//datawriter = nil
 
 			if err := file.Close(); err != nil {
 				log.Printf("ERROR wc.write_cache file.Close err='%v'", err)
 				return 0
 			}
 
-			if err := os.Rename(filename_tmp, filename); err != nil {
+			/*if err := os.Rename(filename_tmp, filename); err != nil {
 				log.Printf("ERROR wc.write_cache move failed .tmp to file='%s' err='%v'", err, filename)
 				return 0
-			}
+			}*/
 
 			if wc.Debug {
 				log.Printf("[ WC ]: wrote file='%s' bytes=%d  took=(%d µs)", log_filename, wrote_bytes, utils.UnixTimeMicroSec()-start)
 			}
 
-			if wc.do_write_cachelog {
-				wc.Log_cache_history_chan <- &[]string{fmt.Sprintf("%s:%d", log_filename, wrote_bytes)}
-			}
+			// todo: do_write_cachelog
+			//if wc.do_write_cachelog {
+			//	wc.Log_cache_history_chan <- &[]string{fmt.Sprintf("%s:%d", log_filename, wrote_bytes)}
+			//}
 
-		} // end open file
+		} else {// end open file
+			log.Printf("ERROR wc.write_cache CREATE file='%s' err='%v'", filename, err)
+		}
 
 	} // end writefile
 
