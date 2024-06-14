@@ -9,14 +9,17 @@ package storage
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"encoding/gob"
 	//"github.com/edsrzf/mmap-go"
 	//"github.com/johnsiilver/golib/mmap"
 	"github.com/go-while/nntp-mmap"
 	"github.com/go-while/go-utils"
 	"golang.org/x/sys/unix"
 	"log"
-	//"io"
+	"io"
+	"io/ioutil"
 	"os"
 	"sync"
 	"syscall"
@@ -62,6 +65,14 @@ type CycBufHandler struct {
 	CycBufs    map[string]*CYCBUF // key: ident, val: pointer to a CYCBUF
 	stop       chan struct{} // receives signal to stop handler
 }
+
+type area struct {
+	minPos int64 // write from minPos to maxPos and rollover or grow cycbuf by: Growby value
+	maxPos int64
+	offset int64
+	Mmap mmap.Map // handle
+	file *os.File
+} // end area struct
 
 type CYCBUF struct {
 	// internal sync points per cycbuf
@@ -128,7 +139,7 @@ type CYCBUF struct {
 } // end CYCBUF struct
 
 
-func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize int64, growby int64, readers int64, writers int64, mode int) (bool, error) {
+func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize int64, growby int64, readers int64, writers int64, mode int, rwtest bool) (bool, error) {
 	handler.mux.Lock()
 	defer handler.mux.Unlock()
 
@@ -266,9 +277,9 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 			case 1:
 				// separate cycbufs for head and body
 				cycFilePathHeadBuf := basedir+"/"+ident+".hbuf"
-				cycFilePathHeadDat := basedir+"/"+ident+".hdat"
+				cycFilePathHeadDat := cycFilePathHeadBuf + ".dat"
 				cycFilePathBodyBuf := basedir+"/"+ident+".bbuf"
-				cycFilePathBodyDat := basedir+"/"+ident+".bdat"
+				cycFilePathBodyDat := cycFilePathBodyBuf + ".dat"
 				if utils.FileExists(cycFilePathHeadBuf) || utils.FileExists(cycFilePathHeadDat) {
 					return false, fmt.Errorf("ERROR InitCycBufs exists='%s'", ident)
 				}
@@ -277,14 +288,14 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 				}
 
 				//log.Printf("Init CycBuf:head ident='%s' fp='%s' dp='%s'", ident, cycFilePathHeadBuf, cycFilePathHeadDat)
-				cbHead, err1 := handler.CreateCycBuf(ident, CycBufType_Head, cycFilePathHeadBuf, cycFilePathHeadDat, initsize, rollover, growby, feb, fem, fes, readers, writers)
+				cbHead, err1 := handler.CreateCycBuf(ident, CycBufType_Head, cycFilePathHeadBuf, initsize, rollover, growby, feb, fem, fes, readers, writers, rwtest)
 				if err1 != nil {
 					log.Printf("ERROR InitCycBufs => CreateCycBuf:head ident='%s' failed...\n --> err1='%v' cbHead='%#v'", ident, err1, cbHead)
 					os.Exit(1)
 				}
 
 				//log.Printf("Init CycBuf:body ident='%s' fp='%s' dp='%s'", ident, cycFilePathBodyBuf, cycFilePathBodyDat)
-				cbBody, err2 := handler.CreateCycBuf(ident, CycBufType_Body, cycFilePathBodyBuf, cycFilePathBodyDat, initsize, rollover, growby, feb, fem, fes, readers, writers)
+				cbBody, err2 := handler.CreateCycBuf(ident, CycBufType_Body, cycFilePathBodyBuf, initsize, rollover, growby, feb, fem, fes, readers, writers, rwtest)
 				if err2 != nil {
 					log.Printf("ERROR InitCycBufs => CreateCycBuf:body ident='%s' failed...\n --> err2='%v' cbBody='%#v'", ident, err2, cbBody)
 					os.Exit(1)
@@ -306,12 +317,12 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 			case 2:
 				// combined cycbuf
 				cycFilePathBuf := basedir+"/"+ident+".cycbuf"
-				cycFilePathDat := basedir+"/"+ident+".cycdat"
+				cycFilePathDat := cycFilePathBuf + ".dat"
 				if utils.FileExists(cycFilePathBuf) || utils.FileExists(cycFilePathDat) {
 					return false, fmt.Errorf("ERROR InitCycBufs exists='%s'", ident)
 				}
 				//log.Printf("Init CycBuf:comb ident='%s' fp='%s' dp='%s'", ident, cycFilePathBuf, cycFilePathDat)
-				cbComb, err := handler.CreateCycBuf(ident, CycBufType_Comb, cycFilePathBuf, cycFilePathDat, initsize, rollover, growby, feb, fem, fes, readers, writers)
+				cbComb, err := handler.CreateCycBuf(ident, CycBufType_Comb, cycFilePathBuf, initsize, rollover, growby, feb, fem, fes, readers, writers, rwtest)
 				if err != nil {
 					log.Printf("ERROR InitCycBufs => CreateCycBuf:comb ident='%s' failed...\n --> err='%v' cbComb='%#v'", ident, err, cbComb)
 					os.Exit(1)
@@ -330,7 +341,7 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 		}
 	}
 	return true, nil
-} // end InitCycBufs
+} // end func InitCycBufs
 
 func (handler *CycBufHandler) Load_CycBufs(indexfile string) bool {
 	handler.mux.Lock()
@@ -348,10 +359,10 @@ func (handler *CycBufHandler) Load_CycBufs(indexfile string) bool {
 	return true
 } // end func Load_CycBufs
 
-func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath string, datpath string, initsize int64, rollover bool, growby int64, feb int64, fem int, fes int64, readers int64, writers int64) (*CYCBUF, error) {
+func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath string, initsize int64, rollover bool, growby int64, feb int64, fem int, fes int64, readers int64, writers int64, rwtest bool) (bool, error) {
 
 	if ident == "" {
-		return nil, fmt.Errorf("ERROR CreateCycBuf: ident is empty")
+		return false, fmt.Errorf("ERROR CreateCycBuf: ident is empty")
 	}
 
 	switch ctype {
@@ -362,7 +373,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		case CycBufType_Comb: // combined cycbuf (head+body)
 			// pass
 		default:
-			return nil, fmt.Errorf("ERROR CreateCycBuf: invalid ctype")
+			return false, fmt.Errorf("ERROR CreateCycBuf: invalid ctype")
 	}
 
 	if initsize <= 0 {
@@ -392,7 +403,7 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		writers = 1 // writers
 	}
 	if writers > 1 && writers%2 != 0 {
-		return nil, fmt.Errorf("ERROR writers must be a multiple of 2")
+		return false, fmt.Errorf("ERROR writers must be a multiple of 2")
 	}
 
 	newCB := &CYCBUF{}
@@ -411,16 +422,16 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 	newCB.TimeOpen = utils.UnixTimeSec()
 	newCB.Offsets = make(map[int]*area)
 
-	//log.Printf("CreateCycBuf: ident='%s' cookie='%s' ctype=%d rollover=%t", ident, newCB.Cookie, ctype, rollover)
+	log.Printf("CreateCycBuf: ident='%s' cookie='%s' ctype=%d rollover=%t", ident, newCB.Cookie, ctype, rollover)
 
 	areasize := newCB.InitCycBufSize
 	if writers == 1 {
 		newCB.Offsets[1] = &area{ minPos: 0, maxPos: areasize }
 	} else {
-		// calculcate areas for writers
+		// calculcate initial areas for writers
 		areasize = newCB.InitCycBufSize / writers
 		if !utils.CheckNumberPowerOfTwo(int(areasize)) {
-			return nil, fmt.Errorf("ERROR CreateCycBuf calculating areasize failed")
+			return false, fmt.Errorf("ERROR CreateCycBuf calculating areasize failed")
 		}
 		//log.Printf(" `-> initsize=%d writers=%d areasize=%d", initsize, writers, areasize)
 		var minPos int64
@@ -435,15 +446,34 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 	// pre-allocate the CycBuf
 	if err := Fallocate(bufpath, 0, newCB.InitCycBufSize); err != nil {
 		log.Printf("ERROR CreateCycBuf Fallocate err='%v'", err)
-		return nil, err
+		return false, err
 	}
 
 	if !utils.FileExists(bufpath) {
-		return nil, fmt.Errorf("ERROR CreateCycBuf Fallocate !FileExists='%s'", bufpath)
+		return false, fmt.Errorf("ERROR CreateCycBuf Fallocate !FileExists='%s'", bufpath)
+	}
+	newCB.Path = bufpath
+	bufdatPath := newCB.Path + ".dat"
+	//log.Printf("writeBufDat newCB=\n '%#v'", newCB)
+	// encode and write the bufdat file here
+	if errwb := handler.writeBufDat(newCB); errwb != nil {
+		log.Printf("ERROR handler.writeBufDat fp='%s' err='%v'", bufdatPath, errwb)
+		return false, errwb
+	}
+	log.Printf("OK handler.writeBufDat fp='%s'", bufdatPath)
+
+	testCB := &CYCBUF{}
+	errgts := loadBufDat(bufdatPath, testCB)
+	if errgts != nil {
+		return false, errgts
+	}
+	//log.Printf("returned from loadBufDat testCB='%#v'", testCB)
+
+	if !rwtest {
+		return true, nil
 	}
 
-	// TODO encode and write the bufdat file here
-
+	// creates 4K long teststring to test writes to cycbuf
 	teststring := ""
 	for i := 0; i < 1024; i++ {
 		teststring = teststring+"0\n0\n"
@@ -452,23 +482,16 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 	// mmap regions for writers and check for null bytes
 	for wid := 1; wid <= int(writers); wid++ {
 		fh, err := os.OpenFile(bufpath, os.O_RDWR, 0644)
-		//defer fh.Close() // dont close and keep open
+		defer fh.Close() // dont close and keep open
 		if err != nil {
-			return nil, err
+			return false, err
 		}
-		mapped, err := mmap.NewMap(fh, int(newCB.Offsets[wid].maxPos), mmap.RDWR, unix.MAP_SHARED, newCB.Offsets[wid].minPos)
-			// options
-			//mmap.Prot(mmap.Read),
-			//mmap.Prot(mmap.Write),
-			//mmap.Flag(mmap.Shared),
-			//mmap.Offset(newCB.Offsets[wid].minPos),
-			//mmap.Length(int(newCB.Offsets[wid].maxPos)))
-			//mmap.Length(areasize))
-			//mmap.Length(areasize))
-		//defer mapped.Close()
+		flag1, flag2 := mmap.RDWR, unix.MAP_SHARED
+		mapped, err := mmap.NewMmap(fh, int(newCB.Offsets[wid].maxPos), flag1, flag2, newCB.Offsets[wid].minPos)
+
 		if err != nil {
 			log.Printf("ERROR CreateCycBuf MapRegion err='%v'", err)
-			return nil, err
+			return false, err
 		}
 
 		//log.Printf(" write wid=%d mapped.Pos=%d len=%d min=%d max=%d", wid, mapped.Pos(), mapped.Len(), newCB.Offsets[wid].minPos, newCB.Offsets[wid].maxPos)
@@ -477,11 +500,13 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		for i := int64(0); i < areasize/4096; i++ {
 			n, err := mapped.Write([]byte(teststring))
 			if err != nil /*&& err != io.EOF*/ {
-				return nil, fmt.Errorf("ERROR CreateCycBuf mapped.Write writes=%d i=%d n=%d bytes=%d err='%v'", writes, i, n, bytectr, err)
+				return false, fmt.Errorf("ERROR CreateCycBuf mapped.Write writes=%d i=%d n=%d bytes=%d err='%v'", writes, i, n, bytectr, err)
 			}
 			writes++
 			bytectr += n
 		}
+		mapped.FlushMmap()
+
 		//log.Printf("  wid=%d writes=%d bytes=%d mapped.Pos=%d", wid, writes, bytectr, mapped.Pos())
 		mapped.Seek(0, 0)
 		//log.Printf(" reset wid=%d mapped.Pos=%d areasize=%d", wid, mapped.Pos(), areasize)
@@ -495,17 +520,18 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 		fileScanner.Split(bufio.ScanLines)
 		for fileScanner.Scan() {
 			if fileScanner.Text() == "0" {
+				// "\n" got removed from line scanner so we count only half of area size
 				//log.Printf(" wid=%d null=%d", wid, null)
 				null++
 			}
 		}
 		if null != areasize/2 {
-			return nil, fmt.Errorf("ERROR CreateCycBuf mmap failed\n ---> null=%d pos=%d areasize=%d miss=%d", null, mapped.Pos(), areasize, areasize/2-null)
+			return false, fmt.Errorf("ERROR CreateCycBuf mmap failed\n ---> null=%d pos=%d areasize=%d miss=%d", null, mapped.Pos(), areasize, areasize/2-null)
 		}
 		mapped.Seek(0, 0)
 		nulls := ""
-		for i := 0; i < 2048; i++ {
-			nulls = nulls+"\x00\x00"
+		for i := 0; i < 1024; i++ {
+			nulls = nulls+"\x00\x00\x00\x00"
 		}
 		//log.Printf(" OK counted null=%d is half of areasize, write nulls=%d bytes=%d", null, len(nulls), len([]byte(nulls)))
 		for i := int64(0); i < areasize/4096; i++ {
@@ -514,23 +540,15 @@ func (handler *CycBufHandler) CreateCycBuf(ident string, ctype int, bufpath stri
 				os.Exit(1)
 			}
 		}
+		mapped.FlushMmap()
 		mapped.Seek(0, 0)
-		newCB.Offsets[wid].Mmap = mapped
-		newCB.Offsets[wid].file = fh
-
+		//newCB.Offsets[wid].Mmap = mapped
+		//newCB.Offsets[wid].file = fh
 		//log.Printf(" `> OK writer=%d/%d mapped=%d nulls=%d pos=%d", wid, writers, len(mapped.Bytes()), null, mapped.Pos())
-	}
-
-	return newCB, nil
+		mapped.Close()
+	} // end for range writers
+	return true, nil
 } // end func CreateCycBuf
-
-type area struct {
-	minPos int64 // write from minPos to maxPos and rollover or grow cycbuf by: Growby value
-	maxPos int64
-	offset int64
-	Mmap mmap.Map // handle
-	file *os.File
-} // end area struct
 
 func Fallocate(filePath string, offset int64, length int64) error {
 	if length == 0 {
@@ -557,7 +575,7 @@ func Fallocate(filePath string, offset int64, length int64) error {
 	  return err
 	}
 	log.Printf("Fallocate OK fp='%s' size=(%d MB)", filePath, fi.Size()/1024/1024)
-	return  nil
+	return nil
 } // end func Fallocate: unix version ripped by github.com/detailyang/go-fallocate
 
 
@@ -570,7 +588,7 @@ func MapRegion(filePath string, minPos int64, maxPos int64) (mmap.Map, *os.File,
 	prot := mmap.RDWR
 	length := int(maxPos-minPos)
 	offset := minPos
-	mapped, errm := mmap.NewMap(fh, length, prot, flags, offset)
+	mapped, errm := mmap.NewMmap(fh, length, prot, flags, offset)
 	if errm != nil {
 		return nil, nil, errm
 	}
@@ -590,3 +608,64 @@ func (handler *CycBufHandler) SetOffset(cb *CYCBUF, wid int, offset int64) {
 	}
 	cb.mux.Unlock()
 } // end func SetOffset
+
+func (handler *CycBufHandler) writeBufDat(cb *CYCBUF) error {
+	cb.mux.Lock()
+	defer cb.mux.Unlock()
+	if cb.Path == "" {
+		return fmt.Errorf("ERROR writeBufDat cb.Path empty")
+	}
+	fp := cb.Path + ".dat"
+	var buf bytes.Buffer
+	err := CYCBUF_ToBytes(cb, &buf)
+	if err != nil {
+		return err
+	}
+	if len(buf.Bytes()) == 0 {
+		return fmt.Errorf("ERROR writeBufDat WriteFile fp='%s' bytes=0")
+	}
+	log.Printf("writeBufDat fp='%s' bytes=%d", fp, len(buf.Bytes()))
+	err = ioutil.WriteFile(fp, buf.Bytes(), 0644)
+	if err != nil {
+		log.Printf("ERROR writeBufDat WriteFile fp='%s' err='%v'", err)
+		return err
+	}
+	return nil // no error
+} // end func writeBufDat
+
+func CYCBUF_ToBytes(input *CYCBUF, output *bytes.Buffer) (error) {
+	encoder := gob.NewEncoder(output)
+	if err := encoder.Encode(input); err != nil {
+		return err
+	}
+	//log.Printf("CYCBUF_ToBytes returning output=%d", len(output.Bytes()))
+	return nil
+} // end func CYCBUF_ToBytes
+
+func AnyBytesToGob(input *[]byte, output *bytes.Buffer) (error) {
+	encoder := gob.NewEncoder(output)
+	if err := encoder.Encode(*input); err != nil {
+		return err
+	}
+	//log.Printf("BytesToGob returning output=%d", output.Bytes())
+	return nil
+} // end func AnyBytesToGob
+
+func loadBufDat(fp string, output *CYCBUF) (error) {
+	// ++ https://gist.github.com/amlwwalker/92d60ae8b27099c166dd013161052c4f
+	fh, err := os.Open(fp)
+	if err != nil {
+		log.Printf("ERROR loadBufDat err='%#v'", err)
+		return err
+	}
+	defer fh.Close()
+	decoder := gob.NewDecoder(fh)
+	if err := decoder.Decode(output); err != nil {
+		if err != io.EOF && err != io.ErrUnexpectedEOF {
+			log.Printf("ERROR loadBufDat fp='%s' err='%#v'", fp, err)
+			return err
+		}
+	}
+	//log.Printf("loadBufDat output=CYCBUF='%#v'", output)
+	return nil // no error
+} // end func loadBufDat
