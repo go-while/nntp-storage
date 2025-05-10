@@ -30,10 +30,11 @@ const (
 	debug = false
 	DefaultCycBufsBaseDir = "/mnt/cb" // without trailing slash!
 	DefaultReaders, DefaultWriters int64 = 1, 1
-	MinInitSize int64 = 1024 * 1024
-	MinGrowSize int64 = 1024 * 1024
-	DefaultSize1G int64 = 1024 * 1024 * 1024
-	DefaultFlushEveryBytes int64 = 64 * 1024
+	MinInitSize int64 = 1024 * 1024 // 1M
+	MinGrowSize int64 = 1024 * 1024 // 1M
+	DefaultSize1G int64 = 1024 * 1024 * 1024 // 1G
+	DefaultFreeSpaceBytes int64 = 64 * 1024 // erase that much space if cycbuf rollover==true
+	DefaultFlushEveryBytes int64 = 64 * 1024 // 64K
 	DefaultFlushEverySeconds int64 = 5
 	DefaultFlushEveryMessages = 200
 	CycBufType_Head = 0xAAA
@@ -111,6 +112,9 @@ type CYCBUF struct {
 	// if set to 0: cycbuf will not grow and server stops accepting articles
 	Growby int64
 
+	// MaxSize defines the maximum size this CycBuf can grow to
+	MaxSize int64
+
 	// spawn this many dedicated readers for this cycbuf
 	// can be changed later without problems
 	Readers int64
@@ -139,7 +143,7 @@ type CYCBUF struct {
 } // end CYCBUF struct
 
 
-func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize int64, growby int64, readers int64, writers int64, mode int, rwtest bool) (bool, error) {
+func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize int64, growby int64, maxsize int64, readers int64, writers int64, mode int, rwtest bool) (bool, error) {
 	handler.mux.Lock()
 	defer handler.mux.Unlock()
 
@@ -164,9 +168,9 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 
 	switch mode {
 		case 1:
-			// separate cycbufs for head and body
+			// pass: separate cycbufs for head and body
 		case 2:
-			// combined cycbuf
+			// pass: combined cycbuf
 		default:
 			return false, fmt.Errorf("ERROR InitCycBufs invalid mode")
 	}
@@ -223,17 +227,17 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 	var cycbufs []string
 
 	switch idx {
-		case 1:
+		case 1: // 16
 			for _, c1 := range cs {
 				cycbufs = append(cycbufs, c1)
 			}
-		case 2:
+		case 2: // 256
 			for _, c1 := range cs {
 				for _, c2 := range cs {
 					cycbufs = append(cycbufs, c1+c2)
 				}
 			}
-		case 3:
+		case 3: // 4096
 			for _, c1 := range cs {
 				for _, c2 := range cs {
 					for _, c3 := range cs {
@@ -241,7 +245,7 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 					}
 				}
 			}
-		case 4:
+		case 4: // 65536
 			for _, c1 := range cs {
 				for _, c2 := range cs {
 					for _, c3 := range cs {
@@ -258,14 +262,19 @@ func (handler *CycBufHandler) InitCycBufs(basedir string, depth int, initsize in
 	if len(cycbufs) != AvailableCycBufsDepths[idx] {
 		return false, fmt.Errorf("invalid idx")
 	}
+	var multi int64 = 1
+	switch mode {
+		case 1:
+			multi = 2
+	}
 
 	log.Printf("Initializing CycBufs=%d idx=%d initsize=[%d MB / cycbuf]=[%d MB total] rollover=%t",
-						len(cycbufs)*2, idx, initsize/1024/1024, int64(len(cycbufs))*2*initsize/1024/1024, rollover)
+						int64(len(cycbufs))*multi, idx, initsize/1024/1024, int64(len(cycbufs))*multi*initsize/1024/1024, rollover)
 
 	log.Printf("-> writers=[%d / cycbuf] * growby=[%d MB / writer] ==> growsize=[%d MB / cycbuf]",
 					writers, growby/1024/1024, writers*growby/1024/1024)
 
-	log.Printf("-> Concurrent Writers: %d", writers*int64(len(cycbufs))*2)
+	log.Printf("-> Concurrent Writers: %d", writers*int64(len(cycbufs))*multi)
 
 	log.Printf("... waiting 5 seconds ... to cancel: ctrl+c !")
 	time.Sleep(time.Second*5)
