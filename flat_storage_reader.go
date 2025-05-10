@@ -188,7 +188,9 @@ for_rc:
 
 				if fileobj, err = ioutil.ReadFile(find_file); err != nil {
 					// read from diskcache failed
-					log.Printf("ioutil.ReadFile err='%v'", err)
+					if rc.Debug {
+						log.Printf("nntp-storage ioutil.ReadFile err='%v'", err)
+					}
 					readreq.Cli_chan <- &ReadItem{nil, err}
 					continue for_rc
 				} // end ioutil.ReadFile
@@ -201,6 +203,7 @@ for_rc:
 					log.Printf("[%s] RC Req wType=%s fp='%s'", readreq.Sessionid, wType, readreq.File_path)
 				}
 
+				/* experimental
 				if do_redis && readreq.AskRedis && find_file == readreq.File_path {
 					// find_file is not overwritten: request to grouphash/msgnum was not in redis
 					// adds link to redis
@@ -213,6 +216,7 @@ for_rc:
 						log.Printf("redis constant LINKING readreq.File_path='%s' ==> find_file='%s'", readreq.File_path, find_file)
 					}
 				}
+				*/
 
 				readreq.Cli_chan <- &ReadItem{&fileobj, nil} // pass answer to read request back to client
 
