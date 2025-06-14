@@ -1,0 +1,111 @@
+package storage
+
+import (
+	"database/sql"
+	"fmt"
+	"log"
+
+	_ "github.com/go-sql-driver/mysql"
+)
+
+var Mysql MySQLHandler
+
+type MySQLHandler struct {
+	db *sql.DB
+	tableName string
+}
+
+func NewMySQLHandler(username, password, address, dbName, tableName string) (*MySQLHandler, error) {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s)/%s", username, password, address, dbName)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		log.Printf("NewMySQLHandler err='%v'", err)
+		return nil, err
+	}
+	if err := SetupDatabase(db); err == nil {
+		if err := SetupIndex(db); err != nil {
+			return nil, err
+		}
+	}
+	return &MySQLHandler{db: db, tableName: tableName}, nil
+}
+
+func SetupDatabase(db *sql.DB) error {
+	_, err := db.Exec(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s"), tableName)
+	if err != nil {
+		log.Printf("SetupDatabase err='%v'", err)
+	}
+	return err
+}
+
+func SetupIndex(db *sql.DB) error {
+	indexSQL := fmt.Sprintf("CREATE INDEX idx_msgidhash ON %s (msgidhash)", tableName)
+	_, err = db.Exec(indexSQL)
+	if err != nil {
+		log.Printf("SetupIndex err='%v'", err)
+	}
+	return err
+}
+
+func (h *MySQLHandler) CreateGroupTable(groupTable *string) error {
+	createTableSQL := fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			msgnum BIGINT PRIMARY KEY,
+			msgidhash VARCHAR(64),
+		)`, *groupTable)
+
+	_, err := h.db.Exec(createTableSQL)
+	return err
+}
+
+func (h *MySQLHandler) InsertValues(groupTable *string, values []struct{ MsgNum *int; MsgIDHash *string }) error {
+	tx, err := h.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(fmt.Sprintf("INSERT INTO %s (msgnum, msgidhash) VALUES (?, ?)", *groupTable))
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, v := range values {
+		_, err := stmt.Exec(v.MsgNum, v.MsgIDHash) // Corrected parameter order
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+
+/*
+
+	handler, err := NewMySQLHandler("username", "password", "localhost:3306", "overview")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer handler.db.Close()
+
+	tableName := "your_table_name"
+
+	err = handler.SetupDatabase()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	err = handler.CreateTable(tableName)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	values := []struct{ MsgIDHash string; MsgNum int }{
+		{"hash1", 1},
+		{"hash2", 2},
+		// Add more values here
+	}
+
+*/
