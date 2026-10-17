@@ -631,12 +631,12 @@ func (handler *CycBufHandler) writeBufDat(cb *CYCBUF) error {
 		return err
 	}
 	if len(buf.Bytes()) == 0 {
-		return fmt.Errorf("ERROR writeBufDat WriteFile fp='%s' bytes=0")
+		return fmt.Errorf("ERROR writeBufDat WriteFile fp='%s' bytes=0", fp)
 	}
 	log.Printf("writeBufDat fp='%s' bytes=%d", fp, len(buf.Bytes()))
 	err = ioutil.WriteFile(fp, buf.Bytes(), 0644)
 	if err != nil {
-		log.Printf("ERROR writeBufDat WriteFile fp='%s' err='%v'", err)
+		log.Printf("ERROR writeBufDat WriteFile fp='%s' err='%v'", fp, err)
 		return err
 	}
 	return nil // no error

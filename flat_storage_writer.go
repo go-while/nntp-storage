@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,8 @@ type CacheItem struct {
 } // end CacheItem struct
 
 type WC struct {
+	write_errors           atomic.Uint64 // failed head/body writes
+	last_write_error       atomic.Int64  // unix time of the last failed write
 	mux                    sync.Mutex
 	bufio_max              int
 	Debug                  bool
@@ -41,6 +44,30 @@ type WC struct {
 	fh_cache_history_hour  int
 	dw_cache_history       *bufio.Writer
 }
+
+func (wc *WC) set_write_error() {
+	wc.write_errors.Add(1)
+	wc.last_write_error.Store(time.Now().Unix())
+} // end func set_write_error
+
+// RecentWriteError reports whether a head or body write failed within the last sec seconds.
+// the frontend should stop accepting articles (436) while this is true: writes are async
+// and a full disk would silently drop every article that is still accepted.
+func (wc *WC) RecentWriteError(sec int64) bool {
+	t := wc.last_write_error.Load()
+	return t > 0 && time.Now().Unix()-t <= sec
+} // end func RecentWriteError
+
+// WriteErrors returns the number of failed head/body writes since start.
+func (wc *WC) WriteErrors() uint64 {
+	return wc.write_errors.Load()
+} // end func WriteErrors
+
+func reply_retchan(retchan chan int, val int) {
+	if retchan != nil {
+		retchan <- val
+	}
+} // end func reply_retchan
 
 func (wc *WC) Load_Writecache(head_wc_workers uint64, wc_head_cache_max int, bodycache_workers uint64, wc_body_cache_max int, cachedir string, history_logdir string, redis_pool *redis.Pool, bufio_max int, debug_flag bool) {
 	wc.mux.Lock()
@@ -132,24 +159,23 @@ for_wc:
 				break for_wc
 			}
 			if object.Lines == nil || len(*object.Lines) == 0 {
-				log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
+				log.Printf("ERROR WC wType=%s wid=%d msgid='%s' no lines size=%d", wType, wid, object.Msgidhash, object.Size)
+				reply_retchan(object.Retchan, 0)
 				continue for_wc
 			}
 			if len(object.Msgidhash) < 32 { // allows at least md5
 				log.Printf("ERROR WC wType=%s wid=%d len(Msgidhash)=%d < 32", wType, wid, len(object.Msgidhash))
+				reply_retchan(object.Retchan, 0)
 				continue for_wc
 			}
 			if object.Size == 0 {
 				// no size supplied?! ok we calc it...
-				if len(*object.Bytes) > 0 {
+				if object.Bytes != nil && len(*object.Bytes) > 0 {
 					object.Size += len(*object.Bytes)
-				} else if len(*object.Lines) > 0 {
+				} else {
 					for _, line := range *object.Lines {
 						object.Size += len(line)
 					}
-				} else {
-					log.Printf("ERROR WC wType=%s wid=%d msgid='%s' lines=%d size=%d", wType, wid, object.Msgidhash, len(*object.Lines), object.Size)
-					continue for_wc
 				}
 			}
 
@@ -222,61 +248,55 @@ func (wc *WC) write_cache(wid uint64, msgidhash string, is_head bool, lines *[]s
 		}*/
 	}
 
-	//filename_tmp := filename + ".tmp"
-
 	if lines != nil {
-
-		if file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-
-			bufsize := size + len(*lines)
-			if bufsize >= wc.bufio_max {
-				bufsize = wc.bufio_max
+		// write to a tmp file and rename it: a crash or a write error never leaves
+		// a partial file under the final name, which STAT would report as present.
+		filename_tmp := fmt.Sprintf("%s.tmp.%d", filename, wid)
+		fail := func(what string, err error, file *os.File) int {
+			log.Printf("ERROR wc.write_cache %s file='%s' err='%v'", what, filename_tmp, err)
+			if file != nil {
+				file.Close()
 			}
-			datawriter := bufio.NewWriterSize(file, bufsize)
-			for _, line := range *lines {
-				if DOTSTUFFING {
-					// dotwriter: escape leading dot
-					if strings.HasPrefix(line, ".") {
-						line = "." + line // add escape dot to line
-					}
-				}
-				if n, err := datawriter.WriteString(line + "\n"); err != nil {
-					log.Printf("ERROR wc.write_cache datawriter.Write err='%v'", err)
-					file.Close()
-					return 0
-				} else {
-					wrote_bytes += n
-				}
-			}
-
-			if err := datawriter.Flush(); err != nil {
-				log.Printf("ERROR wc.write_cache datawriter.Flush err='%v'", err)
-				return 0
-			}
-
-			if err := file.Close(); err != nil {
-				log.Printf("ERROR wc.write_cache file.Close err='%v'", err)
-				return 0
-			}
-
-			/*if err := os.Rename(filename_tmp, filename); err != nil {
-				log.Printf("ERROR wc.write_cache move failed .tmp to file='%s' err='%v'", err, filename)
-				return 0
-			}*/
-
-			if wc.Debug {
-				log.Printf("[ WC ]: wrote file='%s' bytes=%d  took=(%d µs)", log_filename, wrote_bytes, utils.UnixTimeMicroSec()-start)
-			}
-
-			// todo: do_write_cachelog
-			//if wc.do_write_cachelog {
-			//	wc.Log_cache_history_chan <- &[]string{fmt.Sprintf("%s:%d", log_filename, wrote_bytes)}
-			//}
-
-		} else {// end open file
-			log.Printf("ERROR wc.write_cache CREATE file='%s' err='%v'", filename, err)
+			os.Remove(filename_tmp)
+			wc.set_write_error()
+			return 0
 		}
 
+		file, err := os.OpenFile(filename_tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		if err != nil {
+			return fail("CREATE", err, nil)
+		}
+		bufsize := size + len(*lines)
+		if bufsize >= wc.bufio_max {
+			bufsize = wc.bufio_max
+		}
+		datawriter := bufio.NewWriterSize(file, bufsize)
+		for _, line := range *lines {
+			if DOTSTUFFING {
+				// dotwriter: escape leading dot
+				if strings.HasPrefix(line, ".") {
+					line = "." + line // add escape dot to line
+				}
+			}
+			n, err := datawriter.WriteString(line + "\n")
+			if err != nil {
+				return fail("datawriter.Write", err, file)
+			}
+			wrote_bytes += n
+		}
+		if err := datawriter.Flush(); err != nil {
+			return fail("datawriter.Flush", err, file)
+		}
+		if err := file.Close(); err != nil {
+			return fail("file.Close", err, nil)
+		}
+		if err := os.Rename(filename_tmp, filename); err != nil {
+			return fail("rename", err, nil)
+		}
+
+		if wc.Debug {
+			log.Printf("[ WC ]: wrote file='%s' bytes=%d  took=(%d µs)", log_filename, wrote_bytes, utils.UnixTimeMicroSec()-start)
+		}
 	} // end writefile
 
 	return wrote_bytes
@@ -406,7 +426,7 @@ func (wc *WC) STOP_WC() {
 		w1 := StorageCounter.Get("head_writecache_worker")
 		w2 := StorageCounter.Get("body_writecache_worker")
 		if w1 == 0 && w2 == 0 {
-			log.Printf("STOP_WC() quit head_workers + body_workers", w1, w2)
+			log.Printf("STOP_WC() quit head_workers=%d body_workers=%d", w1, w2)
 			break
 		}
 		log.Printf("STOP_WC() waiting... head_worker=%d body_worker=%d", w1, w2)

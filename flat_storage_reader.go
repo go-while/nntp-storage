@@ -6,6 +6,7 @@ import (
 	"github.com/gomodule/redigo/redis"
 	"io/ioutil"
 	"log"
+	"os"
 	"strings"
 	"sync"
 )
@@ -144,7 +145,8 @@ for_rc:
 				} // end if askredis
 
 				if !result {
-					if utils.FileExists(readreq.File_path) {
+					// a 0-byte file is not an article (left over by an old crash): report not found so it is sent again
+					if st, err := os.Stat(readreq.File_path); err == nil && st.Mode().IsRegular() && st.Size() > 0 {
 						//log.Printf("storage STAT OK fp='%s'", readreq.File_path)
 						ret[0] = 'S' // ok
 					} else {
@@ -254,7 +256,7 @@ func (rc *RC) STOP_RC() {
 		w1 := StorageCounter.Get("head_readcache_worker")
 		w2 := StorageCounter.Get("body_readcache_worker")
 		if w1 == 0 && w2 == 0 {
-			log.Printf("STOP_RC() quit head_workers + body_workers", w1, w2)
+			log.Printf("STOP_RC() quit head_workers=%d body_workers=%d", w1, w2)
 			break
 		}
 		log.Printf("STOP_RC() waiting... head_worker=%d body_worker=%d", w1, w2)
